@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-syncwatch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-syncwatch_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-syncwatch}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-syncwatch}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-syncwatch}:${POSTGRES_PASSWORD:-syncwatch_secret}@postgres:5432/${POSTGRES_DB:-syncwatch}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-random-secret-in-production}
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      VIDEO_STORAGE_PATH: /app/videos
+      MAX_ROOM_IDLE_HOURS: ${MAX_ROOM_IDLE_HOURS:-24}
+      MAX_CONCURRENT_DOWNLOADS: ${MAX_CONCURRENT_DOWNLOADS:-3}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - video_data:/app/videos
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    # Copy frontend static files from frontend container
+    # In production, you'd build frontend into nginx directly
+    # For dev, we use the frontend container behind nginx
+
+volumes:
+  postgres_data:
+  redis_data:
+  video_data:
