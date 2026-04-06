@@ -100,6 +100,7 @@ pub async fn create_room(
         state.room_manager.clone(),
         state.config.max_concurrent_downloads,
         state.config.video_storage_path.clone(),
+        state.config.cookies_path.clone(),
     );
     download_service
         .start_download(video_id, room_id, video_url.to_string())

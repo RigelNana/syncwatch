@@ -15,6 +15,7 @@ pub struct DownloadService {
     room_manager: RoomManager,
     semaphore: Arc<Semaphore>,
     storage_path: PathBuf,
+    cookies_path: Option<String>,
 }
 
 impl DownloadService {
@@ -23,6 +24,7 @@ impl DownloadService {
         room_manager: RoomManager,
         max_concurrent: usize,
         storage_path: String,
+        cookies_path: Option<String>,
     ) -> Self {
         let path = PathBuf::from(&storage_path);
         std::fs::create_dir_all(&path).ok();
@@ -31,6 +33,7 @@ impl DownloadService {
             room_manager,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             storage_path: path,
+            cookies_path,
         }
     }
 
@@ -44,6 +47,7 @@ impl DownloadService {
         let room_manager = self.room_manager.clone();
         let semaphore = self.semaphore.clone();
         let storage_path = self.storage_path.clone();
+        let cookies_path = self.cookies_path.clone();
 
         tokio::spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
@@ -62,15 +66,24 @@ impl DownloadService {
             Self::broadcast_progress(&room_manager, room_id, video_id, 0.0, "downloading");
 
             // Run yt-dlp
+            let mut args = vec![
+                "--newline".to_string(),
+                "--no-playlist".to_string(),
+                "--merge-output-format".to_string(), "mp4".to_string(),
+                "-f".to_string(), "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best".to_string(),
+                "-o".to_string(), output_str.clone(),
+            ];
+            if let Some(ref cp) = cookies_path {
+                if std::path::Path::new(cp).exists() {
+                    args.push("--cookies".to_string());
+                    args.push(cp.clone());
+                    tracing::info!("Using cookies file: {}", cp);
+                }
+            }
+            args.push(source_url.clone());
+
             let mut child = match tokio::process::Command::new("yt-dlp")
-                .args([
-                    "--newline",
-                    "--no-playlist",
-                    "--merge-output-format", "mp4",
-                    "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                    "-o", &output_str,
-                    &source_url,
-                ])
+                .args(&args)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -82,6 +95,24 @@ impl DownloadService {
                     Self::broadcast_progress(&room_manager, room_id, video_id, 0.0, "error");
                     return;
                 }
+            };
+
+            // Capture stderr in a separate task
+            let stderr_handle = if let Some(stderr) = child.stderr.take() {
+                Some(tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    let mut stderr_output = String::new();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if !stderr_output.is_empty() {
+                            stderr_output.push('\n');
+                        }
+                        stderr_output.push_str(&line);
+                    }
+                    stderr_output
+                }))
+            } else {
+                None
             };
 
             // Parse progress from yt-dlp stdout
@@ -105,6 +136,12 @@ impl DownloadService {
                     }
                 }
             }
+
+            let stderr_text = if let Some(handle) = stderr_handle {
+                handle.await.unwrap_or_default()
+            } else {
+                String::new()
+            };
 
             let status = child.wait().await;
 
@@ -137,7 +174,7 @@ impl DownloadService {
                     Self::broadcast_progress(&room_manager, room_id, video_id, 100.0, "ready");
                 }
                 _ => {
-                    tracing::error!("yt-dlp exited with error for video {}", video_id);
+                    tracing::error!("yt-dlp exited with error for video {}. stderr: {}", video_id, stderr_text);
                     Self::update_video_status(&db, video_id, "error").await;
                     Self::broadcast_progress(&room_manager, room_id, video_id, 0.0, "error");
                 }

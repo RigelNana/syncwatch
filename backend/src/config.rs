@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub video_storage_path: String,
     pub max_room_idle_hours: u64,
     pub max_concurrent_downloads: usize,
+    pub cookies_path: Option<String>,
 }
 
 impl AppConfig {
@@ -37,6 +38,7 @@ impl AppConfig {
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
                 .unwrap_or(3),
+            cookies_path: std::env::var("COOKIES_PATH").ok().filter(|s| !s.is_empty()),
         }
     }
 }

@@ -45,9 +45,11 @@ services:
       VIDEO_STORAGE_PATH: /app/videos
       MAX_ROOM_IDLE_HOURS: ${MAX_ROOM_IDLE_HOURS:-24}
       MAX_CONCURRENT_DOWNLOADS: ${MAX_CONCURRENT_DOWNLOADS:-3}
+      COOKIES_PATH: /app/cookies.txt
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - video_data:/app/videos
+      - ./cookies.txt:/app/cookies.txt:ro
     depends_on:
       postgres:
         condition: service_healthy
